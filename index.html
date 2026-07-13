@@ -2869,8 +2869,6 @@
                 <div class="history-header">
                     <div class="btn-group">
                         <button class="btn-danger-action" onclick="clearHistory()">清空</button>
-                        <button class="btn-action" onclick="importHistory()">导入</button>
-                        <button class="btn-action" onclick="exportHistory()">导出</button>
                     </div>
                 </div>
                 <div id="historyList"></div>
@@ -2897,8 +2895,6 @@
                 <div class="history-header">
                     <div class="btn-group">
                         <button class="btn-danger-action" onclick="clearVariables()">清空</button>
-                        <button class="btn-action" onclick="importVariables()">导入</button>
-                        <button class="btn-action" onclick="exportVariables()">导出</button>
                         <button class="btn-action" onclick="addVariableRow()">添加</button>
                         <button class="btn-action" onclick="saveVariables()">保存</button>
                     </div>
@@ -6903,93 +6899,6 @@ function postResponse(response) {
         }
 
         /**
-         * 导出历史记录
-         * 将历史记录导出为JSON文件
-         */
-        function exportHistory() {
-            const history = StorageManager.get('requestHistory', []);
-            if (history.length === 0) {
-                return alert('历史记录为空，无需导出');
-            }
-
-            const dataStr = JSON.stringify(history, null, 2);
-            const blob = new Blob([dataStr], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'history_export.json';
-            document.body.appendChild(a);
-            a.click();
-            URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-        }
-
-        /**
-         * 导入历史记录
-         * 从JSON文件导入历史记录
-         */
-        function importHistory() {
-            const fileInput = document.createElement('input');
-            fileInput.type = 'file';
-            fileInput.accept = '.json';
-            fileInput.style.display = 'none';
-            document.body.appendChild(fileInput);
-
-            fileInput.addEventListener('change', async (event) => {
-                const file = event.target.files[0];
-                if (!file) {
-                    return;
-                }
-
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    try {
-                        const content = e.target.result;
-                        const history = JSON.parse(content);
-
-                        // 数据有效性检查
-                        if (!Array.isArray(history)) {
-                            throw new Error('导入的历史记录数据格式不正确');
-                        }
-
-                        // 限制导入的历史记录数量
-                        const MAX_IMPORT_ITEMS = 50;
-                        if (history.length > MAX_IMPORT_ITEMS) {
-                            if (!confirm(`导入的历史记录项超过${MAX_IMPORT_ITEMS}条，是否继续？`)) {
-                                return;
-                            }
-                        }
-
-                        // 获取现有历史记录
-                        let existingHistory = StorageManager.get('requestHistory', []);
-
-                        // 合并历史记录
-                        const mergedHistory = [...existingHistory, ...history];
-
-                        // 去重，保留最新的记录
-                        const uniqueHistory = Array.from(new Map(mergedHistory.map(item => [item.url + JSON.stringify(item.headers), item])).values());
-
-                        // 限制历史记录数量
-                        const finalHistory = uniqueHistory.slice(-MAX_HISTORY_ITEMS);
-
-                        // 保存到localStorage
-                        StorageManager.set('requestHistory', finalHistory);
-
-                        alert('历史记录导入成功');
-                        updateHistoryDisplay();
-                    } catch (error) {
-                        alert('导入历史记录时发生错误: ' + error.message);
-                    }
-                };
-
-                reader.readAsText(file);
-            });
-
-            fileInput.click();
-            document.body.removeChild(fileInput);
-        }
-
-        /**
          * 保存当前请求到接口列表
          * 将当前请求保存到选中的接口集合中
          */
@@ -7206,23 +7115,326 @@ function postResponse(response) {
             }
         }
 
+        /* ============================================================
+           Postman Collection v2.1 / Environment 双向互转
+           - 导出：WebCurl 集合 → Postman collection.json；变量 → environment.json
+           - 导入：Postman collection.json（v2.1/v2.0，含文件夹）→ 扁平化进当前集合；
+                  environment.json → 变量
+           - WS/SSE 作为普通条目保留（method 标 WS/SSE，WS 消息体以 raw JSON 携带）
+           ============================================================ */
+        function genPostmanId() {
+            try {
+                if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                    return window.crypto.randomUUID();
+                }
+            } catch (e) { }
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        /** 选取多备选 body 中的当前选中内容（json/text/xml） */
+        function pickSelectedContent(arr) {
+            if (!Array.isArray(arr) || arr.length === 0) return '';
+            const sel = arr.find(x => x && x.selected);
+            return ((sel || arr[0]).content) || '';
+        }
+
+        /** WebCurl body → Postman body（无 body 返回 undefined） */
+        function wcBodyToPostman(body) {
+            if (!body || !body.type || body.type === 'none') return undefined;
+            const t = body.type;
+            const data = body.data;
+            if (t === 'json' || t === 'text' || t === 'xml') {
+                return {
+                    mode: 'raw',
+                    raw: pickSelectedContent(data),
+                    options: { raw: { language: t === 'json' ? 'json' : (t === 'xml' ? 'xml' : 'text') } }
+                };
+            }
+            if (t === 'websocket') {
+                // WS 消息体以 raw JSON 携带，导入时按 method=WS 还原
+                return { mode: 'raw', raw: JSON.stringify(data || []), options: { raw: { language: 'json' } } };
+            }
+            if (t === 'form') {
+                const urlencoded = [];
+                if (data && typeof data === 'object') {
+                    Object.entries(data).forEach(([k, v]) => {
+                        urlencoded.push({ key: k, value: (v && v.value) || '', type: 'text', disabled: v && v.enabled === false });
+                    });
+                }
+                return { mode: 'urlencoded', urlencoded };
+            }
+            if (t === 'formdata') {
+                const formdata = [];
+                if (Array.isArray(data)) {
+                    data.forEach(item => {
+                        if (!item || !item.key) return;
+                        formdata.push({
+                            key: item.key,
+                            value: item.type === 'file' ? '' : (item.value || ''),
+                            type: item.type === 'file' ? 'file' : 'text',
+                            disabled: item.enabled === false
+                        });
+                    });
+                }
+                return { mode: 'formdata', formdata };
+            }
+            if (t === 'binary') {
+                // 二进制内容不持久化，仅保留文件名信息
+                return { mode: 'file', file: { details: { name: typeof data === 'string' ? data : '' } } };
+            }
+            return undefined;
+        }
+
+        /** WebCurl url 字符串 → Postman url 对象（尽量解析；不可解析时只保留 raw） */
+        function wcUrlToPostmanUrl(rawUrl) {
+            const obj = { raw: rawUrl || '' };
+            try {
+                const u = new URL(rawUrl);
+                if (u.protocol) obj.protocol = u.protocol.replace(':', '');
+                if (u.host) obj.host = u.host.split('.');
+                if (u.pathname && u.pathname !== '/') obj.path = u.pathname.split('/').filter(Boolean);
+                const params = [];
+                u.searchParams.forEach((v, k) => params.push({ key: k, value: v }));
+                if (params.length) obj.query = params;
+            } catch (e) { /* 非 http(s)/ws(s) 等可解析 URL，仅保留 raw */ }
+            return obj;
+        }
+
+        /** WebCurl apiItem → Postman item */
+        function wcApiToPostmanItem(api) {
+            const item = { name: api.name || 'Request', id: genPostmanId() };
+            const header = [];
+            if (api.headers && typeof api.headers === 'object') {
+                Object.entries(api.headers).forEach(([k, v]) => {
+                    if (!k) return;
+                    header.push({ key: k, value: (v && v.value) || '', type: 'text', disabled: v && v.enabled === false });
+                });
+            }
+            const request = { method: (api.method || 'GET').toUpperCase() };
+            if (header.length) request.header = header;
+            const body = wcBodyToPostman(api.body);
+            if (body) request.body = body;
+            request.url = wcUrlToPostmanUrl(api.url);
+            item.request = request;
+
+            const event = [];
+            if (api.hooks) {
+                const toExec = script => (script || '').split(/\r?\n/);
+                if (api.hooks.preRequest && api.hooks.preRequest.enabled && (api.hooks.preRequest.script || '').trim()) {
+                    event.push({ listen: 'prerequest', script: { type: 'text/javascript', exec: toExec(api.hooks.preRequest.script) } });
+                }
+                if (api.hooks.postResponse && api.hooks.postResponse.enabled && (api.hooks.postResponse.script || '').trim()) {
+                    event.push({ listen: 'test', script: { type: 'text/javascript', exec: toExec(api.hooks.postResponse.script) } });
+                }
+            }
+            if (event.length) item.event = event;
+            return item;
+        }
+
+        /** 收集集合中实际引用到的变量（{{name}}），交集本地变量库，作为 collection 变量导出 */
+        function collectReferencedVars(apis, allVars) {
+            const used = new Set();
+            const re = /\{\{\s*([^{}]+?)\s*\}\}/g;
+            const hay = [];
+            (apis || []).forEach(api => {
+                hay.push(api.url || '', api.name || '');
+                if (api.headers && typeof api.headers === 'object') {
+                    Object.entries(api.headers).forEach(([k, v]) => hay.push(k, (v && v.value) || ''));
+                }
+                if (api.body && api.body.data != null) hay.push(JSON.stringify(api.body.data));
+            });
+            const text = hay.join('\n');
+            let m;
+            while ((m = re.exec(text))) used.add(m[1].trim());
+            const out = [];
+            used.forEach(name => {
+                if (allVars.has(name)) {
+                    out.push({ key: name, value: allVars.get(name), type: 'default', enabled: true });
+                }
+            });
+            return out;
+        }
+
+        /** WebCurl 集合 → Postman v2.1 collection（variables 可选：collection 级变量） */
+        function wcToPostmanCollection(collection, variables) {
+            const out = {
+                info: {
+                    _postman_id: genPostmanId(),
+                    name: collection.name || 'WebCurl Collection',
+                    description: 'Exported from WebCurl',
+                    schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+                },
+                item: (collection.apis || []).map(wcApiToPostmanItem)
+            };
+            if (Array.isArray(variables) && variables.length) out.variable = variables;
+            return out;
+        }
+
+        /** Postman url 对象/字符串 → 完整 url 字符串 */
+        function postmanUrlToString(url) {
+            if (!url) return '';
+            if (typeof url === 'string') return url;
+            if (url.raw) return url.raw;
+            let s = '';
+            if (url.protocol) s += url.protocol + '://';
+            s += Array.isArray(url.host) ? url.host.join('.') : (url.host || '');
+            if (Array.isArray(url.path) && url.path.length) s += '/' + url.path.join('/');
+            if (Array.isArray(url.query) && url.query.length) {
+                s += '?' + url.query.map(q => encodeURIComponent(q.key) + '=' + encodeURIComponent(q.value || '')).join('&');
+            }
+            return s;
+        }
+
+        /** 把 Postman auth 配置（数组或对象）展平为 {key:value} */
+        function postmanAuthValue(conf) {
+            const obj = {};
+            if (Array.isArray(conf)) {
+                conf.forEach(kv => { if (kv && kv.key) obj[kv.key] = kv.value; });
+            } else if (conf && typeof conf === 'object') {
+                Object.assign(obj, conf);
+            }
+            return obj;
+        }
+
+        /** Postman body → WebCurl body */
+        function postmanBodyToWcBody(reqBody, method) {
+            if (!reqBody || !reqBody.mode) return { type: 'none', data: null };
+            const m = reqBody.mode;
+            if (m === 'raw') {
+                const raw = reqBody.raw != null ? String(reqBody.raw) : '';
+                const lang = reqBody.options && reqBody.options.raw && reqBody.options.raw.language;
+                if (method === 'WS') {
+                    // WS 消息体：还原为 websocket body
+                    let arr = [];
+                    try { arr = JSON.parse(raw) || []; } catch (e) {
+                        arr = [{ type: 'text', value: raw, selected: true, remark: '' }];
+                    }
+                    return { type: 'websocket', data: arr };
+                }
+                const t = (lang === 'json') ? 'json' : (lang === 'xml' ? 'xml' : 'text');
+                return { type: t, data: [{ content: raw, selected: true, remark: '' }] };
+            }
+            if (m === 'urlencoded') {
+                const data = {};
+                (reqBody.urlencoded || []).forEach(p => {
+                    if (!p || !p.key) return;
+                    data[p.key] = { value: p.value || '', enabled: !p.disabled, remark: '' };
+                });
+                return { type: 'form', data };
+            }
+            if (m === 'formdata') {
+                const data = (reqBody.formdata || []).filter(p => p && p.key).map(p => ({
+                    key: p.key,
+                    type: p.type === 'file' ? 'file' : 'text',
+                    value: p.type === 'file' ? '' : (p.value || ''),
+                    enabled: !p.disabled,
+                    remark: ''
+                }));
+                return { type: 'formdata', data };
+            }
+            if (m === 'file') {
+                return { type: 'binary', data: '' };
+            }
+            if (m === 'graphql') {
+                const obj = reqBody.graphql || {};
+                return { type: 'json', data: [{ content: JSON.stringify(obj, null, 2), selected: true, remark: 'graphql' }] };
+            }
+            return { type: 'none', data: null };
+        }
+
+        /** Postman 叶子 item → WebCurl apiItem */
+        function postmanRequestToApi(item) {
+            const req = item.request || {};
+            const method = (req.method || 'GET').toUpperCase();
+            const api = {
+                name: item.name || '',
+                method,
+                url: postmanUrlToString(req.url),
+                headers: {},
+                body: postmanBodyToWcBody(req.body, method),
+                hooks: { preRequest: { enabled: false, script: '' }, postResponse: { enabled: false, script: '' } },
+                timestamp: new Date().toISOString()
+            };
+            if (!api.name) api.name = (method + ' ' + (api.url || '').slice(0, 60)).trim() || 'Request';
+
+            // headers 数组 → 对象 map
+            if (Array.isArray(req.header)) {
+                req.header.forEach(h => {
+                    if (!h || !h.key) return;
+                    api.headers[h.key] = { value: h.value || '', enabled: !h.disabled, remark: '' };
+                });
+            }
+
+            // auth 折叠为请求头 / query
+            if (req.auth && req.auth.type) {
+                const a = postmanAuthValue(req.auth[req.auth.type]);
+                if (req.auth.type === 'bearer' && a.token != null && a.token !== '') {
+                    api.headers['Authorization'] = { value: 'Bearer ' + a.token, enabled: true, remark: '' };
+                } else if (req.auth.type === 'basic') {
+                    const raw = (a.username || '') + ':' + (a.password || '');
+                    try { api.headers['Authorization'] = { value: 'Basic ' + btoa(raw), enabled: true, remark: '' }; } catch (e) { }
+                } else if (req.auth.type === 'apikey' && a.key) {
+                    if (a.in === 'query') {
+                        api.url += (api.url.includes('?') ? '&' : '?') + encodeURIComponent(a.key) + '=' + encodeURIComponent(a.value || '');
+                    } else {
+                        api.headers[a.key] = { value: a.value || '', enabled: true, remark: '' };
+                    }
+                }
+            }
+
+            // events → hooks（prerequest → 前置脚本，test → 后置脚本）
+            if (Array.isArray(item.event)) {
+                item.event.forEach(ev => {
+                    const script = ev.script || {};
+                    const exec = Array.isArray(script.exec) ? script.exec.join('\n') : (script.exec != null ? String(script.exec) : '');
+                    if (ev.listen === 'prerequest') {
+                        api.hooks.preRequest = { enabled: true, script: exec };
+                    } else if (ev.listen === 'test') {
+                        api.hooks.postResponse = { enabled: true, script: exec };
+                    }
+                });
+            }
+            return api;
+        }
+
+        /** 递归扁平化 Postman item（含文件夹）为 api 数组 */
+        function flattenPostmanItems(items, out) {
+            if (!Array.isArray(items)) return out;
+            items.forEach(it => {
+                if (it && Array.isArray(it.item) && it.item.length > 0) {
+                    flattenPostmanItems(it.item, out);       // 文件夹：递归摊平
+                } else if (it && it.request) {
+                    out.push(postmanRequestToApi(it));        // 叶子请求
+                }
+            });
+            return out;
+        }
+
         /**
-         * 导出接口列表
-         * 将当前集合的接口列表导出为JSON文件
+         * 导出接口列表（Postman Collection v2.1）
+         * 导出后可直接用 Postman 的 Import 打开
          */
         function exportApis() {
             let collections = getApiCollections();
             let current = getCurrentCollectionName();
             let collection = collections.find(c => c.name === current);
-            if (!collection || collection.apis.length === 0) {
+            if (!collection || !collection.apis || collection.apis.length === 0) {
                 return alert('当前集合接口列表为空，无需导出');
             }
-            const dataStr = JSON.stringify(collection.apis, null, 2);
+            // 把集合中引用到的 {{变量}} 一并写进 collection.variable，保证 Postman 打开变量不缺失
+            const envConf = StorageManager.get('env_conf', []);
+            const allVars = new Map(envConf.filter(v => v && v.env_name).map(v => [v.env_name, v.env_value || '']));
+            const variables = collectReferencedVars(collection.apis, allVars);
+            const dataStr = JSON.stringify(wcToPostmanCollection(collection, variables), null, 2);
             const blob = new Blob([dataStr], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${current}_apis_export.json`;
+            a.download = `${current}.postman_collection.json`;
             document.body.appendChild(a);
             a.click();
             URL.revokeObjectURL(url);
@@ -7230,8 +7442,7 @@ function postResponse(response) {
         }
 
         /**
-         * 导入接口列表
-         * 从JSON文件导入接口列表
+         * 导入接口列表（支持 Postman Collection v2.1/v2.0，文件夹自动扁平化）
          */
         function importApis() {
             const fileInput = document.createElement('input');
@@ -7248,9 +7459,19 @@ function postResponse(response) {
                 reader.onload = async (e) => {
                     try {
                         const content = e.target.result;
-                        const apis = JSON.parse(content);
-                        if (!Array.isArray(apis)) {
-                            throw new Error('导入的接口数据格式不正确');
+                        const obj = JSON.parse(content);
+                        let apis;
+                        if (obj && !Array.isArray(obj) && (obj.info || Array.isArray(obj.item))) {
+                            // Postman Collection（v2.1 / v2.0）
+                            apis = flattenPostmanItems(obj.item || [], []);
+                        } else if (Array.isArray(obj)) {
+                            // 兜底：直接是 api 数组
+                            apis = obj;
+                        } else {
+                            throw new Error('未识别的文件格式，请使用 Postman 导出的 collection.json');
+                        }
+                        if (!apis.length) {
+                            throw new Error('文件中没有可导入的接口');
                         }
                         let collections = getApiCollections();
                         let current = getCurrentCollectionName();
@@ -7259,13 +7480,44 @@ function postResponse(response) {
                             collection = { name: current, apis: [] };
                             collections.push(collection);
                         }
-                        // 合并接口列表
+                        // 合并并按 name 去重，保留最新
                         const mergedApis = [...collection.apis, ...apis];
-                        // 去重，保留最新的记录
                         const uniqueApis = Array.from(new Map(mergedApis.map(item => [item.name, item])).values());
                         collection.apis = uniqueApis;
                         setApiCollections(collections);
-                        alert('接口列表导入成功');
+                        // 顺带导入 collection 级变量（{{host}} 等），合并进变量库
+                        // - collection 内同名变量出现多次时，优先取未禁用项（与 Postman 实际行为一致）
+                        // - 导入后一律视为启用，确保 {{var}} 立即可用；已存在于本地变量库的同名变量不覆盖
+                        let varAdded = 0;
+                        if (Array.isArray(obj.variable)) {
+                            const vmap = new Map();
+                            obj.variable.forEach(v => {
+                                if (!v || !v.key) return;
+                                const enable = v.disabled !== true;
+                                const prev = vmap.get(v.key);
+                                if (!prev || (enable && !prev.enable)) {
+                                    vmap.set(v.key, { value: v.value != null ? String(v.value) : '', enable });
+                                }
+                            });
+                            const envConf = StorageManager.get('env_conf', []);
+                            const existing = new Set(envConf.map(v => v && v.env_name));
+                            vmap.forEach((info, name) => {
+                                if (existing.has(name)) return;
+                                envConf.push({
+                                    row_id: envConf.length + 1,
+                                    enable: true,
+                                    env_name: name,
+                                    env_value: info.value
+                                });
+                                existing.add(name);
+                                varAdded++;
+                            });
+                            if (varAdded > 0) {
+                                StorageManager.set('env_conf', envConf);
+                                if (typeof loadVariables === 'function') loadVariables();
+                            }
+                        }
+                        alert(`接口列表导入成功，共 ${apis.length} 个${varAdded ? '（附带导入 ' + varAdded + ' 个变量，已启用）' : ''}`);
                         updateApisDisplay();
                     } catch (error) {
                         alert('导入接口列表时发生错误: ' + error.message);
@@ -7369,70 +7621,6 @@ function postResponse(response) {
                 StorageManager.remove('env_conf');
                 loadVariables();
             }
-        }
-
-        /**
-         * 导出变量配置
-         * 将变量配置导出为JSON文件
-         */
-        function exportVariables() {
-            const envConf = StorageManager.get('env_conf', []);
-            if (envConf.length === 0) {
-                return alert('没有可导出的变量');
-            }
-
-            const dataStr = JSON.stringify(envConf, null, 2);
-            const blob = new Blob([dataStr], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'variables_export.json';
-            document.body.appendChild(a);
-            a.click();
-            URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-        }
-
-        /**
-         * 导入变量配置
-         * 从JSON文件导入变量配置
-         */
-        function importVariables() {
-            const fileInput = document.createElement('input');
-            fileInput.type = 'file';
-            fileInput.accept = '.json';
-            fileInput.style.display = 'none';
-            document.body.appendChild(fileInput);
-
-            fileInput.addEventListener('change', async (event) => {
-                const file = event.target.files[0];
-                if (!file) {
-                    return;
-                }
-
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    try {
-                        const content = e.target.result;
-                        const envConf = JSON.parse(content);
-
-                        if (!Array.isArray(envConf)) {
-                            throw new Error('导入的变量数据格式不正确');
-                        }
-
-                        StorageManager.set('env_conf', envConf);
-                        loadVariables();
-                        alert('变量导入成功');
-                    } catch (error) {
-                        alert('导入变量时发生错误: ' + error.message);
-                    }
-                };
-
-                reader.readAsText(file);
-            });
-
-            fileInput.click();
-            document.body.removeChild(fileInput);
         }
 
         /**
