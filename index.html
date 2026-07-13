@@ -769,12 +769,6 @@
             border-radius: 10px;
         }
 
-        .setting-input-integrity {
-            display: none;
-            width: 100%;
-            margin-top: 5px;
-        }
-
         .collection-selector {
             margin-bottom: 10px;
             display: flex;
@@ -3328,69 +3322,6 @@ function postResponse(response) {
 
             <label>SSE事件类型列表 (逗号分隔)</label>
             <input type="text" id="settingSseEventTypes" placeholder="例如: update,info,warn" class="setting-input">
-
-            <hr class="divider">
-
-            <label>缓存策略 (cache)</label>
-            <select id="settingCache">
-                <option value="default">default - 默认，先在缓存里面寻找匹配的请求</option>
-                <option value="no-store">no-store - 直接请求远程服务器，不更新缓存</option>
-                <option value="reload">reload - 直接请求远程服务器，更新缓存</option>
-                <option value="no-cache">no-cache - 将服务器资源跟本地缓存进行比较</option>
-                <option value="force-cache">force-cache - 缓存优先</option>
-                <option value="only-if-cached">only-if-cached - 只检查缓存</option>
-            </select>
-
-            <label>请求模式 (mode)</label>
-            <select id="settingMode">
-                <option value="cors">cors - 允许跨域请求</option>
-                <option value="same-origin">same-origin - 只允许同源请求</option>
-                <option value="no-cors">no-cors - 仅限简单请求方法和标头</option>
-                <option value="navigate">navigate - navigate</option>
-            </select>
-
-            <label>发送凭证 (credentials)</label>
-            <select id="settingCredentials">
-                <option value="same-origin">same-origin - 同源发送Cookie</option>
-                <option value="include">include - 同源和跨域都发送Cookie</option>
-                <option value="omit">omit - 不发送Cookie</option>
-            </select>
-
-            <label>重定向处理 (redirect)</label>
-            <select id="settingRedirect">
-                <option value="follow">follow - 自动跟随跳转</option>
-                <option value="error">error - 跳转时报错</option>
-                <option value="manual">manual - 手动处理跳转</option>
-            </select>
-
-            <label>Referrer 策略 (referrerPolicy)</label>
-            <select id="settingReferrerPolicy">
-                <option value="no-referrer-when-downgrade">no-referrer-when-downgrade - 默认规则</option>
-                <option value="no-referrer">no-referrer - 不发送Referrer</option>
-                <option value="origin">origin - 只发送域名</option>
-                <option value="origin-when-cross-origin">origin-when-cross-origin - 跨域时只发送域名</option>
-                <option value="same-origin">same-origin - 仅同源发送</option>
-                <option value="strict-origin">strict-origin - 安全降级时不发送</option>
-                <option value="strict-origin-when-cross-origin">strict-origin-when-cross-origin - 安全跨域规则</option>
-                <option value="unsafe-url">unsafe-url - 总是发送完整URL</option>
-            </select>
-
-            <label>Referrer</label>
-            <select id="settingReferrer">
-                <option value="about:client">about:client - 默认行为</option>
-                <option value="">空 - 不发送referrer</option>
-                <option value="custom">自定义</option>
-            </select>
-            <input type="text" id="settingReferrerCustom" placeholder="自定义referrer URL" class="setting-input-integrity">
-
-            <label>完整性校验 (integrity)</label>
-            <input type="text" id="settingIntegrity" placeholder="输入哈希值" class="setting-input">
-
-            <label>保持连接 (keepalive)</label>
-            <select id="settingKeepalive">
-                <option value="false">false - 默认</option>
-                <option value="true">true - 保持连接</option>
-            </select>
         </div>
         <div class="dialog-buttons">
             <button onclick="closeSettings()">取消</button>
@@ -3401,40 +3332,11 @@ function postResponse(response) {
     <script>
         "use strict";
         /**
-         * 全局变量：是否使用代理模式
-         * @type {boolean}
-         */
-        let useProxy = false;
-
-        /**
          * 函数别名称
          */
         const byId = id => document.getElementById(id);
         const docSelectAll = e => document.querySelectorAll(e);
 
-
-        /**
-         * 初始化代理模式状态
-         * 页面加载时请求 /api/mode 接口获取当前运行模式
-         * @returns {Promise<void>}
-         */
-        async function initUseProxy() {
-            try {
-                const modeResp = await fetch('/api/mode');
-                if (modeResp.ok) {
-                    const modeData = await modeResp.json();
-                    if (modeData && modeData.mode === 'proxy') {
-                        useProxy = true;
-                    } else {
-                        useProxy = false;
-                    }
-                } else {
-                    useProxy = false;
-                }
-            } catch (e) {
-                useProxy = false;
-            }
-        }
 
         /**
          * Hook脚本执行引擎
@@ -4517,8 +4419,8 @@ function postResponse(response) {
 
         /**
          * 处理代理请求
-         * 
-         * 当useProxy为true时，请求通过后端代理转发
+         *
+         * 所有请求均通过后端代理转发
          * 代理模式支持：跨域请求、自定义SSL验证、重定向控制等
          * 
          * 核心流程：
@@ -5296,41 +5198,6 @@ function postResponse(response) {
                 const row = responseHeadersTable.insertRow();
                 row.insertCell(0).textContent = key;
                 row.insertCell(1).textContent = Array.isArray(values) ? values.join(', ') : values;
-            }
-        }
-
-        /**
-         * 设置Content-Type并获取请求体
-         * @param {Object} headers - 请求头对象
-         * @param {string} bodyType - 请求体类型
-         * @param {Object} requestOptions - 请求选项
-         * @returns {Promise<void>}
-         */
-        async function setContentTypeAndBody(headers, bodyType, requestOptions, requestBody) {
-            switch (bodyType) {
-                case 'form':
-                    headers['Content-Type'] = 'application/x-www-form-urlencoded';
-                    break;
-                case 'json':
-                    headers['Content-Type'] = 'application/json';
-                    break;
-                case 'text':
-                    const customContentType = headers['Content-Type'];
-                    if (customContentType && customContentType.startsWith('text/')) {
-                        headers['Content-Type'] = customContentType;
-                    } else {
-                        headers['Content-Type'] = 'text/plain';
-                    }
-                    break;
-                case 'binary':
-                    headers['Content-Type'] = 'application/octet-stream';
-                    break;
-            }
-
-            if (requestBody !== undefined && requestBody !== null) {
-                requestOptions.body = requestBody;
-            } else {
-                requestOptions.body = await getRequestBody(bodyType);
             }
         }
 
@@ -6657,95 +6524,13 @@ function postResponse(response) {
                 headers = hookRequest.headers;
                 requestBody = hookRequest.body;
 
-                const requestOptions = {
-                    method,
-                    headers,
-                    cache: settings.cache,
-                    mode: settings.mode,
-                    credentials: settings.credentials,
-                    redirect: settings.redirect,
-                    referrer: settings.referrer,
-                    referrerPolicy: settings.referrerPolicy,
-                    integrity: settings.integrity || undefined,
-                    keepalive: settings.keepalive,
-                    signal: signal
-                };
-
-                if (useProxy && method !== 'WS' && method !== 'SSE') {
+                // 始终走后端代理转发（/api/forward），WS/SSE 走 handleWSRequest
+                if (method !== 'WS' && method !== 'SSE') {
                     await handleProxyRequest(url, method, bodyType, headers, settings, download, signal, requestBody, currentTabId);
                     return;
                 }
 
-                if (useProxy && (method === 'WS' || method === 'SSE')) {
-                    await handleWSRequest(url, method, headers, settings, signal, currentTabId);
-                    return;
-                }
-
-                if (bodyType !== 'none' && method !== 'GET') {
-                    await setContentTypeAndBody(headers, bodyType, requestOptions, requestBody);
-                }
-
-                const startTime = Date.now();
-                const response = await fetch(url, requestOptions);
-                const duration = Date.now() - startTime;
-                const contentType = response.headers.get('content-type');
-
-                const responseHeaders = {};
-                response.headers.forEach((value, key) => {
-                    responseHeaders[key] = value;
-                });
-
-                let responseText = '';
-                const binaryTypes = [
-                    'application/octet-stream',
-                    'application/pdf',
-                    'image/',
-                    'audio/',
-                    'video/',
-                    'application/zip',
-                    'application/x-rar'
-                ];
-                const isBinaryContent = contentType && binaryTypes.some(type => contentType.includes(type));
-
-                if (!isBinaryContent) {
-                    responseText = await response.text();
-                }
-
-                const hookResponse = await HookEngine.executePostResponse({
-                    status: response.status,
-                    statusText: response.statusText,
-                    headers: responseHeaders,
-                    body: responseText,
-                    duration,
-                    contentType
-                });
-
-                if (hookResponse.body !== undefined && hookResponse.body !== responseText) {
-                    responseText = hookResponse.body;
-                }
-
-                // 检查是否还在同一个Tab，如果是才更新界面
-                if (RequestTabManager.activeTabId === currentTabId) {
-                    if (download) {
-                        await handleDownloadResponse(response, contentType);
-                    } else {
-                        await handleNormalResponseWithBody(response, duration, contentType, responseText, isBinaryContent);
-                    }
-                    await updateResponseHeaders(response);
-                    RequestTabManager.saveCurrentResponseData();
-                } else {
-                    // 不在同一个Tab，将响应数据保存到发起请求的Tab中
-                    RequestTabManager.saveResponseToTab(currentTabId, {
-                        status: response.status,
-                        statusText: response.statusText,
-                        headers: responseHeaders,
-                        body: responseText,
-                        duration,
-                        contentType
-                    });
-                }
-
-                saveRequestToHistory();
+                await handleWSRequest(url, method, headers, settings, signal, currentTabId);
             } catch (error) {
                 // 只有在同一个Tab时才显示错误
                 if (RequestTabManager.activeTabId === currentTabId) {
@@ -7871,17 +7656,6 @@ function postResponse(response) {
             byId('settingRetryDelay').value = currentSettings.retry_delay;
             byId('settingStream').value = currentSettings.stream || 'false';
             byId('settingSseEventTypes').value = currentSettings.sse_event_types || '';
-
-            byId('settingCache').value = currentSettings.cache;
-            byId('settingMode').value = currentSettings.mode;
-            byId('settingCredentials').value = currentSettings.credentials;
-            byId('settingRedirect').value = currentSettings.redirect;
-            byId('settingReferrerPolicy').value = currentSettings.referrerPolicy;
-            byId('settingReferrer').value = currentSettings.referrer === 'custom' ? 'custom' : currentSettings.referrer;
-            byId('settingReferrerCustom').value = currentSettings.referrer !== 'about:client' && currentSettings.referrer !== '' ? currentSettings.referrer : '';
-            byId('settingIntegrity').value = currentSettings.integrity;
-            byId('settingKeepalive').value = currentSettings.keepalive.toString();
-            handleReferrerChange();
         }
 
         /**
@@ -7898,17 +7672,6 @@ function postResponse(response) {
                 retry_delay: byId('settingRetryDelay').value,
                 stream: byId('settingStream').value,
                 sse_event_types: byId('settingSseEventTypes').value,
-
-                cache: byId('settingCache').value,
-                mode: byId('settingMode').value,
-                credentials: byId('settingCredentials').value,
-                redirect: byId('settingRedirect').value,
-                referrerPolicy: byId('settingReferrerPolicy').value,
-                referrer: byId('settingReferrer').value === 'custom'
-                    ? byId('settingReferrerCustom').value
-                    : byId('settingReferrer').value,
-                integrity: byId('settingIntegrity').value,
-                keepalive: byId('settingKeepalive').value === 'true'
             };
             StorageManager.set('requestSettings', settings);
             closeSettings();
@@ -7922,14 +7685,6 @@ function postResponse(response) {
         function getRequestSettings() {
             const settings = StorageManager.get('requestSettings', {});
             const defaultSettings = {
-                cache: 'default',
-                mode: 'cors',
-                credentials: 'same-origin',
-                redirect: 'follow',
-                referrerPolicy: 'no-referrer-when-downgrade',
-                referrer: 'about:client',
-                integrity: '',
-                keepalive: false,
                 default_protocol: 'http',
                 verify_ssl: 'N',
                 follow_redirect: 'N',
@@ -7940,16 +7695,6 @@ function postResponse(response) {
                 sse_event_types: ''
             };
             return { ...defaultSettings, ...settings };
-        }
-
-        /**
-         * 处理Referrer设置变化
-         * 当Referrer选择为自定义时显示自定义输入框
-         */
-        function handleReferrerChange() {
-            const referrerSelect = byId('settingReferrer');
-            const customInput = byId('settingReferrerCustom');
-            customInput.style.display = referrerSelect.value === 'custom' ? 'block' : 'none';
         }
 
         /**
@@ -8422,40 +8167,25 @@ function postResponse(response) {
             const startTime = Date.now();
             try {
                 let status, statusText, respHeaders = {}, body = '', contentType;
-                if (useProxy) {
-                    const fd = new FormData();
-                    fd.append('url', url);
-                    fd.append('method', finalMethod);
-                    fd.append('body_type', bodyType === 'formdata' ? 'form-data' : (bodyType === 'form' ? 'x-www-form-urlencoded' : bodyType));
-                    fd.append('headers', JSON.stringify(Object.entries(headers).map(([name, value]) => ({ name, value }))));
-                    fd.append('time_out', settings.timeout || '0');
-                    fd.append('verify_ssl', settings.verify_ssl || 'N');
-                    fd.append('follow_redirect', settings.follow_redirect || 'N');
-                    fd.append('retry_count', settings.retry_count || '0');
-                    fd.append('retry_delay', settings.retry_delay || '0');
-                    fd.append('stream', 'false');
-                    runnerAppendProxyBody(fd, api, bodyType, finalBody);
+                const fd = new FormData();
+                fd.append('url', url);
+                fd.append('method', finalMethod);
+                fd.append('body_type', bodyType === 'formdata' ? 'form-data' : (bodyType === 'form' ? 'x-www-form-urlencoded' : bodyType));
+                fd.append('headers', JSON.stringify(Object.entries(headers).map(([name, value]) => ({ name, value }))));
+                fd.append('time_out', settings.timeout || '0');
+                fd.append('verify_ssl', settings.verify_ssl || 'N');
+                fd.append('follow_redirect', settings.follow_redirect || 'N');
+                fd.append('retry_count', settings.retry_count || '0');
+                fd.append('retry_delay', settings.retry_delay || '0');
+                fd.append('stream', 'false');
+                runnerAppendProxyBody(fd, api, bodyType, finalBody);
 
-                    const resp = await fetch('/api/forward', { method: 'POST', body: fd });
-                    status = resp.status;
-                    statusText = resp.statusText;
-                    contentType = resp.headers.get('content-type');
-                    resp.headers.forEach((v, k) => respHeaders[k] = v);
-                    body = await resp.text();
-                } else {
-                    const requestOptions = { method: finalMethod, headers, redirect: settings.redirect };
-                    // 直连模式仅处理可序列化为字符串的请求体（none/json/text/form/xml），
-                    // formdata/binary 需代理模式；避免回退去读 DOM。
-                    if (bodyType !== 'none' && finalMethod !== 'GET' && bodyStr != null) {
-                        await setContentTypeAndBody(headers, bodyType, requestOptions, finalBody != null ? finalBody : bodyStr);
-                    }
-                    const resp = await fetch(url, requestOptions);
-                    status = resp.status;
-                    statusText = resp.statusText;
-                    contentType = resp.headers.get('content-type');
-                    resp.headers.forEach((v, k) => respHeaders[k] = v);
-                    body = await resp.text();
-                }
+                const resp = await fetch('/api/forward', { method: 'POST', body: fd });
+                status = resp.status;
+                statusText = resp.statusText;
+                contentType = resp.headers.get('content-type');
+                resp.headers.forEach((v, k) => respHeaders[k] = v);
+                body = await resp.text();
 
                 const duration = Date.now() - startTime;
                 const postResp = await HookEngine.executePostResponse({
@@ -9803,7 +9533,6 @@ function postResponse(response) {
                     updateHistoryDisplay(),
                     updateApisDisplay(),
                     loadVariables(),
-                    initUseProxy(),
                     updateApiCollectionSelect()
                 ]);
 
